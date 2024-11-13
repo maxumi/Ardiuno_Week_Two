@@ -1,8 +1,3 @@
-/*********
-  Rui Santos & Sara Santos - Random Nerd Tutorials
-  Complete instructions at https://RandomNerdTutorials.com/esp32-wi-fi-manager-asyncwebserver/
-  Permission is hereby granted, free of charge, to any person obtaining a copy of this software and associated documentation files.
-*********/
 #include <Arduino.h>
 #include <WiFi.h>
 #include <ESPAsyncWebServer.h>
@@ -11,20 +6,15 @@
 
 // Create AsyncWebServer object on port 80
 AsyncWebServer server(80);
+AsyncWebSocket ws("/ws"); // WebSocket server on endpoint "/ws"
 
-// Search for parameter in HTTP POST request
+// Wi-Fi parameters
 const char* PARAM_INPUT_1 = "ssid";
 const char* PARAM_INPUT_2 = "pass";
 const char* PARAM_INPUT_3 = "ip";
 const char* PARAM_INPUT_4 = "gateway";
 
-// Variables to save values from HTML form
-String ssid;
-String pass;
-String ip;
-String gateway;
-
-// File paths to save input values permanently
+String ssid, pass, ip, gateway;
 const char* ssidPath = "/ssid.txt";
 const char* passPath = "/pass.txt";
 const char* ipPath = "/ip.txt";
@@ -34,10 +24,16 @@ IPAddress localIP;
 IPAddress localGateway;
 IPAddress subnet(255, 255, 0, 0);
 
-unsigned long previousMillis = 0;
-const long interval = 10000;  // interval to wait for Wi-Fi connection (milliseconds)
+const int touchPin = T0;
+int touchThreshold = 40;
+int touchCounter = 0;
 
 const int ledPin = 2;
+unsigned long lastSaveTime = 0;
+unsigned long previousMillis = 0;
+const unsigned long saveInterval = 60000; // Save every 60 seconds
+const long interval = 10000; // Wi-Fi connection interval
+
 String ledState;
 
 // Initialize SPIFFS
@@ -111,53 +107,62 @@ bool initWiFi() {
   return true;
 }
 
-// Replaces placeholder with LED state value
+// Replaces placeholder with values
 String processor(const String& var) {
   if (var == "STATE") {
-    if (digitalRead(ledPin)) {
-      ledState = "ON";
-    } else {
-      ledState = "OFF";
-    }
-    return ledState;
+    return digitalRead(ledPin) ? "ON" : "OFF";
+  } else if (var == "TOUCHCOUNT") {
+    return String(touchCounter);
   }
   return String();
 }
 
+// WebSocket event handler
+void onWebSocketEvent(AsyncWebSocket *server, AsyncWebSocketClient *client, AwsEventType type, void *arg, uint8_t *data, size_t len) {
+  if (type == WS_EVT_CONNECT) {
+    Serial.println("WebSocket client connected");
+  } else if (type == WS_EVT_DISCONNECT) {
+    Serial.println("WebSocket client disconnected");
+  }
+}
+
+const unsigned long wsUpdateInterval = 1000; // 1 second WebSocket update interval
+unsigned long lastWsUpdate = 0;
+
 void setup() {
   Serial.begin(115200);
-
   initSPIFFS();
 
   pinMode(ledPin, OUTPUT);
   digitalWrite(ledPin, LOW);
-  
-  // Load values saved in SPIFFS
+
+  // Load Wi-Fi credentials from SPIFFS
   ssid = readFile(SPIFFS, ssidPath);
   pass = readFile(SPIFFS, passPath);
   ip = readFile(SPIFFS, ipPath);
   gateway = readFile(SPIFFS, gatewayPath);
-  Serial.println(ssid);
-  Serial.println(pass);
-  Serial.println(ip);
-  Serial.println(gateway);
 
+  // Load touchCounter from SPIFFS
+  String touchCountStr = readFile(SPIFFS, "/touchcount.txt");
+  touchCounter = touchCountStr != "" ? touchCountStr.toInt() : 0;
+
+  // Initialize Wi-Fi in STA mode or configure as Access Point
   if (initWiFi()) {
+    // Serve main HTML page with WebSocket processor
     server.on("/", HTTP_GET, [](AsyncWebServerRequest *request) {
       request->send(SPIFFS, "/index.html", "text/html", false, processor);
     });
     server.serveStatic("/", SPIFFS, "/");
-    
+
+    // Serve ON and OFF endpoints to control LED
     server.on("/on", HTTP_GET, [](AsyncWebServerRequest *request) {
       digitalWrite(ledPin, HIGH);
       request->send(SPIFFS, "/index.html", "text/html", false, processor);
     });
-
     server.on("/off", HTTP_GET, [](AsyncWebServerRequest *request) {
       digitalWrite(ledPin, LOW);
       request->send(SPIFFS, "/index.html", "text/html", false, processor);
     });
-    server.begin();
   } else {
     Serial.println("Setting AP (Access Point)");
     WiFi.softAP("ESP-WIFI-MANAGER_MAX", NULL);
@@ -165,49 +170,74 @@ void setup() {
     Serial.print("AP IP address: ");
     Serial.println(IP);
 
-    server.on("/", HTTP_GET, [](AsyncWebServerRequest *request){
+    // Serve WiFi manager HTML page
+    server.on("/", HTTP_GET, [](AsyncWebServerRequest *request) {
       request->send(SPIFFS, "/wifimanager.html", "text/html");
     });
-    server.serveStatic("/", SPIFFS, "/");
-    
+
+    // Handle form POST request to save Wi-Fi credentials
     server.on("/", HTTP_POST, [](AsyncWebServerRequest *request) {
       int params = request->params();
       for (int i = 0; i < params; i++) {
-        const AsyncWebParameter* p = request->getParam(i);
+        AsyncWebParameter* p = request->getParam(i);
         if (p->isPost()) {
-          if (p->name() == PARAM_INPUT_1) {
+          if (p->name() == "ssid") {
             ssid = p->value().c_str();
-            Serial.print("SSID set to: ");
-            Serial.println(ssid);
             writeFile(SPIFFS, ssidPath, ssid.c_str());
           }
-          if (p->name() == PARAM_INPUT_2) {
+          if (p->name() == "pass") {
             pass = p->value().c_str();
-            Serial.print("Password set to: ");
-            Serial.println(pass);
             writeFile(SPIFFS, passPath, pass.c_str());
           }
-          if (p->name() == PARAM_INPUT_3) {
+          if (p->name() == "ip") {
             ip = p->value().c_str();
-            Serial.print("IP Address set to: ");
-            Serial.println(ip);
             writeFile(SPIFFS, ipPath, ip.c_str());
           }
-          if (p->name() == PARAM_INPUT_4) {
+          if (p->name() == "gateway") {
             gateway = p->value().c_str();
-            Serial.print("Gateway set to: ");
-            Serial.println(gateway);
             writeFile(SPIFFS, gatewayPath, gateway.c_str());
           }
         }
       }
-      request->send(200, "text/plain", "Done. ESP will restart, connect to your router and go to IP address: " + ip);
+      request->send(200, "text/plain", "Settings saved. Rebooting...");
       delay(3000);
       ESP.restart();
     });
-    server.begin();
   }
+
+  // Serve the CSS file
+  server.serveStatic("/style.css", SPIFFS, "/style.css");
+
+  // WebSocket setup and event handling
+  ws.onEvent(onWebSocketEvent);
+  server.addHandler(&ws);
+
+  // Start the server
+  server.begin();
 }
 
+
 void loop() {
+  int touchValue = touchRead(touchPin);
+  if (touchValue < touchThreshold) {
+    touchCounter++;
+    Serial.print("Touch detected! Counter: ");
+    Serial.println(touchCounter);
+    delay(500); // Debounce delay
+  }
+
+  // Check if there's a connected WebSocket client and send message if interval has passed
+  if (ws.count() > 0 && (millis() - lastWsUpdate >= wsUpdateInterval)) {
+    lastWsUpdate = millis();
+    ws.textAll(String(touchCounter));
+  }
+
+  // Periodically save touchCounter to SPIFFS
+  if (millis() - lastSaveTime > saveInterval) {
+    lastSaveTime = millis();
+    writeFile(SPIFFS, "/touchcount.txt", String(touchCounter).c_str());
+    Serial.println("touchCounter saved to SPIFFS.");
+  }
+
+  delay(50);
 }

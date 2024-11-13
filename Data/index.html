@@ -19,7 +19,42 @@
           </p>
           <p class="state">State: %STATE%</p>
         </div>
+        <!-- New card for displaying touch count -->
+        <div class="card">
+          <p class="card-title"><i class="fas fa-hand-pointer"></i> Touch Sensor</p>
+          <p class="touch-count">Touch Counter: <span id="touchCounter">0</span></p>
+        </div>
       </div>
     </div>
   </body>
+  <script>
+    var gateway = `ws://${window.location.hostname}/ws`;
+    var websocket;
+    window.addEventListener('load', onLoad);
+  
+    function onLoad(event) {
+      initWebSocket();
+    }
+  
+    function initWebSocket() {
+      websocket = new WebSocket(gateway);
+      websocket.onmessage = function(event) {
+        const touchCounterElement = document.getElementById('touchCounter');
+        if (touchCounterElement) {
+          touchCounterElement.innerHTML = event.data;
+        } else {
+          console.error("Element with id 'touchCounter' not found.");
+        }
+      };
+
+      websocket.onerror = (error) => {
+        console.error("WebSocket Error:", error);
+      };
+
+      websocket.onclose = () => {
+        console.log("WebSocket connection closed, retrying...");
+        setTimeout(initWebSocket, 1000);
+      };
+    }
+  </script>
 </html>
