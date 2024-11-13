@@ -25,9 +25,9 @@
         <p class="card-title"><i class="fas fa-hand-pointer"></i> Touch Sensor</p>
         <p class="touch-count">Touch Counter: <span id="touchCounter">0</span></p>
       </div>
-      <!-- Static chart that loads on page load -->
+      <!-- Chart that displays touch analysis -->
       <div class="card">
-        <h2>Touch Data Chart</h2>
+        <h2>Touch Data Analysis</h2>
         <canvas id="touchChart"></canvas>
       </div>
     </div>
@@ -73,38 +73,75 @@
         });
     }
 
-    // Display a static chart with data fetched from the server
+    // Display a chart with data fetched from the server
     function displayChart(data) {
       const ctx = document.getElementById('touchChart').getContext('2d');
       const labels = data.map(entry => new Date(parseInt(entry.timestamp)).toLocaleTimeString());
-      const values = data.map(entry => entry.value);
+      const touchCounts = data.map(entry => entry.touchCount);
+      const touchRates = data.map(entry => entry.touchRate);
 
-      // Initialize Chart.js with static data
       touchChart = new Chart(ctx, {
         type: 'line',
         data: {
           labels: labels,
-          datasets: [{
-            label: 'Touch Count',
-            data: values,
-            borderColor: 'rgba(75, 192, 192, 1)',
-            backgroundColor: 'rgba(75, 192, 192, 0.2)',
-            fill: true
-          }]
+          datasets: [
+            {
+              label: 'Total Touch Count',
+              data: touchCounts,
+              borderColor: 'rgba(75, 192, 192, 1)',
+              backgroundColor: 'rgba(75, 192, 192, 0.2)',
+              fill: false,
+              yAxisID: 'y'
+            },
+            {
+              label: 'Touch Rate (per minute)',
+              data: touchRates,
+              borderColor: 'rgba(255, 99, 132, 1)',
+              backgroundColor: 'rgba(255, 99, 132, 0.2)',
+              fill: false,
+              yAxisID: 'y1'
+            }
+          ]
         },
         options: {
           responsive: true,
+          interaction: {
+            mode: 'index',
+            intersect: false,
+          },
+          stacked: false,
+          plugins: {
+            title: {
+              display: true,
+              text: 'Touch Data Analysis'
+            }
+          },
           scales: {
+            y: {
+              type: 'linear',
+              display: true,
+              position: 'left',
+              title: {
+                display: true,
+                text: 'Total Touch Count'
+              }
+            },
+            y1: {
+              type: 'linear',
+              display: true,
+              position: 'right',
+              grid: {
+                drawOnChartArea: false,
+              },
+              title: {
+                display: true,
+                text: 'Touch Rate (per minute)'
+              }
+            },
             x: {
               title: {
                 display: true,
                 text: 'Time'
-              }
-            },
-            y: {
-              title: {
-                display: true,
-                text: 'Touch Count'
               }
             }
           }

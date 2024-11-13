@@ -27,17 +27,22 @@ IPAddress subnet(255, 255, 0, 0);
 const int touchPin = T0;
 int touchThreshold = 40;
 int touchCounter = 0;
+int touchEventsInInterval = 0;
+int peakTouchRate = 0;
 
 const int ledPin = 2;
 unsigned long lastSaveTime = 0;
 unsigned long previousMillis = 0;
-const unsigned long saveInterval = 60000; // Save every 60 seconds
-const long interval = 10000; // Wi-Fi connection interval
+const unsigned long saveInterval = 60000;      // Save every 60 seconds
+const unsigned long analysisInterval = 60000;  // Analyze every 60 seconds
+unsigned long lastAnalysisTime = 0;
+const long interval = 10000;                   // Wi-Fi connection interval
 
 const char* dataFilePath = "/data.csv";
 
-
 String ledState;
+
+// Function to convert CSV data to JSON
 String csvToJson(fs::FS &fs, const char * path) {
   File file = fs.open(path);
   if (!file) {
@@ -54,11 +59,13 @@ String csvToJson(fs::FS &fs, const char * path) {
       } else {
         firstLine = false;
       }
-      int commaIndex = line.indexOf(',');
-      if (commaIndex > 0) {
-        String timestamp = line.substring(0, commaIndex);
-        String value = line.substring(commaIndex + 1);
-        json += "{\"timestamp\":" + timestamp + ",\"value\":" + value + "}";
+      int commaIndex1 = line.indexOf(',');
+      int commaIndex2 = line.indexOf(',', commaIndex1 + 1);
+      if (commaIndex1 > 0 && commaIndex2 > commaIndex1) {
+        String timestamp = line.substring(0, commaIndex1);
+        String touchCount = line.substring(commaIndex1 + 1, commaIndex2);
+        String touchRate = line.substring(commaIndex2 + 1);
+        json += "{\"timestamp\":" + timestamp + ",\"touchCount\":" + touchCount + ",\"touchRate\":" + touchRate + "}";
       }
     }
   }
@@ -67,6 +74,7 @@ String csvToJson(fs::FS &fs, const char * path) {
   return json;
 }
 
+// Function to append data to a file
 void appendToFile(fs::FS &fs, const char * path, const char * message) {
   File file = fs.open(path, FILE_APPEND);
   if (!file) {
@@ -81,20 +89,21 @@ void appendToFile(fs::FS &fs, const char * path, const char * message) {
   file.close();
 }
 
+// Function to limit the number of entries in the CSV file
 void limitCSVEntries(fs::FS &fs, const char * path, int maxEntries) {
   File file = fs.open(path, FILE_READ);
   if (!file) {
     Serial.println("- failed to open file for reading");
     return;
   }
-  
+
   // Read all lines into an array
-  String lines[51]; // Max entries + 1
+  String lines[101]; // Max entries + 1
   int lineCount = 0;
   while (file.available()) {
     String line = file.readStringUntil('\n');
     if (line.length() > 0) {
-      if (lineCount < 51) {
+      if (lineCount < 101) {
         lines[lineCount] = line;
         lineCount++;
       }
@@ -118,7 +127,6 @@ void limitCSVEntries(fs::FS &fs, const char * path, int maxEntries) {
   file.close();
 }
 
-
 // Initialize SPIFFS
 void initSPIFFS() {
   if (!SPIFFS.begin(true)) {
@@ -141,6 +149,7 @@ String readFile(fs::FS &fs, const char * path) {
     fileContent = file.readStringUntil('\n');
     break;
   }
+  file.close();
   return fileContent;
 }
 
@@ -157,6 +166,7 @@ void writeFile(fs::FS &fs, const char * path, const char * message) {
   } else {
     Serial.println("- write failed");
   }
+  file.close();
 }
 
 // Initialize WiFi
@@ -166,12 +176,6 @@ bool initWiFi() {
     return false;
   }
   WiFi.mode(WIFI_STA);
-  
-  // Remove or comment out this line to use DHCP
-  // if (!WiFi.config(localIP, localGateway, subnet)) {
-  //   Serial.println("STA Failed to configure");
-  //   return false;
-  // }
 
   WiFi.begin(ssid.c_str(), pass.c_str());
   Serial.println("Connecting to WiFi...");
@@ -190,18 +194,9 @@ bool initWiFi() {
   return true;
 }
 
-// Replaces placeholder with values
-String processor(const String& var) {
-  if (var == "STATE") {
-    return digitalRead(ledPin) ? "ON" : "OFF";
-  } else if (var == "TOUCHCOUNT") {
-    return String(touchCounter);
-  }
-  return String();
-}
-
 // WebSocket event handler
-void onWebSocketEvent(AsyncWebSocket *server, AsyncWebSocketClient *client, AwsEventType type, void *arg, uint8_t *data, size_t len) {
+void onWebSocketEvent(AsyncWebSocket *server, AsyncWebSocketClient *client,
+                      AwsEventType type, void *arg, uint8_t *data, size_t len) {
   if (type == WS_EVT_CONNECT) {
     Serial.println("WebSocket client connected");
   } else if (type == WS_EVT_DISCONNECT) {
@@ -211,6 +206,36 @@ void onWebSocketEvent(AsyncWebSocket *server, AsyncWebSocketClient *client, AwsE
 
 const unsigned long wsUpdateInterval = 1000; // 1 second WebSocket update interval
 unsigned long lastWsUpdate = 0;
+
+// Perform periodic analysis and save results
+void performAnalysis() {
+  if (millis() - lastAnalysisTime >= analysisInterval) {
+    lastAnalysisTime = millis();
+
+    // Calculate touch rate (touch events per minute)
+    int touchRate = touchEventsInInterval;
+    if (touchRate > peakTouchRate) {
+      peakTouchRate = touchRate;
+    }
+
+    // Get current timestamp
+    unsigned long timestamp = millis();
+
+    // Format data as CSV line: timestamp,touchCounter,touchRate
+    String dataLine = String(timestamp) + "," + String(touchCounter) + "," + String(touchRate);
+
+    // Append data to CSV file
+    appendToFile(SPIFFS, dataFilePath, dataLine.c_str());
+
+    // Limit the CSV file to the last 100 entries
+    limitCSVEntries(SPIFFS, dataFilePath, 100);
+
+    Serial.println("Analysis saved to CSV.");
+
+    // Reset touchEventsInInterval for the next interval
+    touchEventsInInterval = 0;
+  }
+}
 
 void setup() {
   Serial.begin(115200);
@@ -225,27 +250,15 @@ void setup() {
   ip = readFile(SPIFFS, ipPath);
   gateway = readFile(SPIFFS, gatewayPath);
 
-  // Load touchCounter from SPIFFS
-  String touchCountStr = readFile(SPIFFS, "/touchcount.txt");
-  touchCounter = touchCountStr != "" ? touchCountStr.toInt() : 0;
-
   // Initialize Wi-Fi in STA mode or configure as Access Point
   if (initWiFi()) {
-    // Serve main HTML page with WebSocket processor
+    // Serve main HTML page
     server.on("/", HTTP_GET, [](AsyncWebServerRequest *request) {
-      request->send(SPIFFS, "/index.html", "text/html", false, processor);
+      request->send(SPIFFS, "/index.html", "text/html");
     });
     server.serveStatic("/", SPIFFS, "/");
 
-    // Serve ON and OFF endpoints to control LED
-    server.on("/on", HTTP_GET, [](AsyncWebServerRequest *request) {
-      digitalWrite(ledPin, HIGH);
-      request->send(SPIFFS, "/index.html", "text/html", false, processor);
-    });
-    server.on("/off", HTTP_GET, [](AsyncWebServerRequest *request) {
-      digitalWrite(ledPin, LOW);
-      request->send(SPIFFS, "/index.html", "text/html", false, processor);
-    });
+    // Serve data as JSON
     server.on("/data", HTTP_GET, [](AsyncWebServerRequest *request) {
       String json = csvToJson(SPIFFS, dataFilePath);
       request->send(200, "application/json", json);
@@ -303,26 +316,13 @@ void setup() {
   server.begin();
 }
 
-
 void loop() {
   int touchValue = touchRead(touchPin);
   if (touchValue < touchThreshold) {
     touchCounter++;
+    touchEventsInInterval++;
     Serial.print("Touch detected! Counter: ");
     Serial.println(touchCounter);
-
-    // Get current timestamp
-    unsigned long timestamp = millis();
-
-    // Format data as CSV line
-    String dataLine = String(timestamp) + "," + String(touchCounter);
-
-    // Append data to CSV file
-    appendToFile(SPIFFS, dataFilePath, dataLine.c_str());
-
-    // Limit the CSV file to the last 50 entries
-    limitCSVEntries(SPIFFS, dataFilePath, 50);
-
     delay(500); // Debounce delay
   }
 
@@ -331,6 +331,9 @@ void loop() {
     lastWsUpdate = millis();
     ws.textAll(String(touchCounter));
   }
+
+  // Perform periodic analysis and save results
+  performAnalysis();
 
   // Periodically save touchCounter to SPIFFS
   if (millis() - lastSaveTime > saveInterval) {
