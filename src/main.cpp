@@ -34,7 +34,90 @@ unsigned long previousMillis = 0;
 const unsigned long saveInterval = 60000; // Save every 60 seconds
 const long interval = 10000; // Wi-Fi connection interval
 
+const char* dataFilePath = "/data.csv";
+
+
 String ledState;
+String csvToJson(fs::FS &fs, const char * path) {
+  File file = fs.open(path);
+  if (!file) {
+    Serial.println("- failed to open file for reading");
+    return "[]";
+  }
+  String json = "[";
+  bool firstLine = true;
+  while (file.available()) {
+    String line = file.readStringUntil('\n');
+    if (line.length() > 0) {
+      if (!firstLine) {
+        json += ",";
+      } else {
+        firstLine = false;
+      }
+      int commaIndex = line.indexOf(',');
+      if (commaIndex > 0) {
+        String timestamp = line.substring(0, commaIndex);
+        String value = line.substring(commaIndex + 1);
+        json += "{\"timestamp\":" + timestamp + ",\"value\":" + value + "}";
+      }
+    }
+  }
+  json += "]";
+  file.close();
+  return json;
+}
+
+void appendToFile(fs::FS &fs, const char * path, const char * message) {
+  File file = fs.open(path, FILE_APPEND);
+  if (!file) {
+    Serial.println("- failed to open file for appending");
+    return;
+  }
+  if (file.println(message)) {
+    Serial.println("- message appended");
+  } else {
+    Serial.println("- append failed");
+  }
+  file.close();
+}
+
+void limitCSVEntries(fs::FS &fs, const char * path, int maxEntries) {
+  File file = fs.open(path, FILE_READ);
+  if (!file) {
+    Serial.println("- failed to open file for reading");
+    return;
+  }
+  
+  // Read all lines into an array
+  String lines[51]; // Max entries + 1
+  int lineCount = 0;
+  while (file.available()) {
+    String line = file.readStringUntil('\n');
+    if (line.length() > 0) {
+      if (lineCount < 51) {
+        lines[lineCount] = line;
+        lineCount++;
+      }
+    }
+  }
+  file.close();
+
+  // If more than maxEntries, remove oldest entries
+  int start = lineCount > maxEntries ? lineCount - maxEntries : 0;
+  int count = lineCount - start;
+
+  // Write back the latest entries to the file
+  file = fs.open(path, FILE_WRITE);
+  if (!file) {
+    Serial.println("- failed to open file for writing");
+    return;
+  }
+  for (int i = start; i < lineCount; i++) {
+    file.println(lines[i]);
+  }
+  file.close();
+}
+
 
 // Initialize SPIFFS
 void initSPIFFS() {
@@ -78,18 +161,18 @@ void writeFile(fs::FS &fs, const char * path, const char * message) {
 
 // Initialize WiFi
 bool initWiFi() {
-  if (ssid == "" || ip == "") {
-    Serial.println("Undefined SSID or IP address.");
+  if (ssid == "") {
+    Serial.println("Undefined SSID.");
     return false;
   }
   WiFi.mode(WIFI_STA);
-  localIP.fromString(ip.c_str());
-  localGateway.fromString(gateway.c_str());
+  
+  // Remove or comment out this line to use DHCP
+  // if (!WiFi.config(localIP, localGateway, subnet)) {
+  //   Serial.println("STA Failed to configure");
+  //   return false;
+  // }
 
-  if (!WiFi.config(localIP, localGateway, subnet)) {
-    Serial.println("STA Failed to configure");
-    return false;
-  }
   WiFi.begin(ssid.c_str(), pass.c_str());
   Serial.println("Connecting to WiFi...");
 
@@ -103,7 +186,7 @@ bool initWiFi() {
       return false;
     }
   }
-  Serial.println(WiFi.localIP());
+  Serial.println(WiFi.localIP()); // This will show the dynamically assigned IP
   return true;
 }
 
@@ -162,6 +245,10 @@ void setup() {
     server.on("/off", HTTP_GET, [](AsyncWebServerRequest *request) {
       digitalWrite(ledPin, LOW);
       request->send(SPIFFS, "/index.html", "text/html", false, processor);
+    });
+    server.on("/data", HTTP_GET, [](AsyncWebServerRequest *request) {
+      String json = csvToJson(SPIFFS, dataFilePath);
+      request->send(200, "application/json", json);
     });
   } else {
     Serial.println("Setting AP (Access Point)");
@@ -223,10 +310,23 @@ void loop() {
     touchCounter++;
     Serial.print("Touch detected! Counter: ");
     Serial.println(touchCounter);
+
+    // Get current timestamp
+    unsigned long timestamp = millis();
+
+    // Format data as CSV line
+    String dataLine = String(timestamp) + "," + String(touchCounter);
+
+    // Append data to CSV file
+    appendToFile(SPIFFS, dataFilePath, dataLine.c_str());
+
+    // Limit the CSV file to the last 50 entries
+    limitCSVEntries(SPIFFS, dataFilePath, 50);
+
     delay(500); // Debounce delay
   }
 
-  // Check if there's a connected WebSocket client and send message if interval has passed
+  // WebSocket update logic
   if (ws.count() > 0 && (millis() - lastWsUpdate >= wsUpdateInterval)) {
     lastWsUpdate = millis();
     ws.textAll(String(touchCounter));

@@ -1,60 +1,116 @@
 <!DOCTYPE html>
 <html>
-  <head>
-    <title>ESP WEB SERVER</title>
-    <meta name="viewport" content="width=device-width, initial-scale=1">
-    <link rel="stylesheet" type="text/css" href="style.css">
-  </head>
-  <body>
-    <div class="topnav">
-      <h1>ESP WEB SERVER</h1>
-    </div>
-    <div class="content">
-      <div class="card-grid">
-        <div class="card">
-          <p class="card-title"><i class="fas fa-lightbulb"></i> GPIO 2</p>
-          <p>
-            <a href="on"><button class="button-on">ON</button></a>
-            <a href="off"><button class="button-off">OFF</button></a>
-          </p>
-          <p class="state">State: %STATE%</p>
-        </div>
-        <!-- New card for displaying touch count -->
-        <div class="card">
-          <p class="card-title"><i class="fas fa-hand-pointer"></i> Touch Sensor</p>
-          <p class="touch-count">Touch Counter: <span id="touchCounter">0</span></p>
-        </div>
+<head>
+  <title>ESP WEB SERVER</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <link rel="stylesheet" type="text/css" href="style.css">
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+</head>
+<body>
+  <div class="topnav">
+    <h1>ESP WEB SERVER</h1>
+  </div>
+  <div class="content">
+    <div class="card-grid">
+      <div class="card">
+        <p class="card-title"><i class="fas fa-lightbulb"></i> GPIO 2</p>
+        <p>
+          <a href="on"><button class="button-on">ON</button></a>
+          <a href="off"><button class="button-off">OFF</button></a>
+        </p>
+        <p class="state">State: %STATE%</p>
+      </div>
+      <!-- Counter that updates live from WebSocket -->
+      <div class="card">
+        <p class="card-title"><i class="fas fa-hand-pointer"></i> Touch Sensor</p>
+        <p class="touch-count">Touch Counter: <span id="touchCounter">0</span></p>
+      </div>
+      <!-- Static chart that loads on page load -->
+      <div class="card">
+        <h2>Touch Data Chart</h2>
+        <canvas id="touchChart"></canvas>
       </div>
     </div>
-  </body>
+  </div>
   <script>
     var gateway = `ws://${window.location.hostname}/ws`;
     var websocket;
+    var touchChart;
+
     window.addEventListener('load', onLoad);
-  
+
     function onLoad(event) {
       initWebSocket();
+      fetchChartData();
     }
-  
+
+    // Initialize WebSocket connection to update the counter in real-time
     function initWebSocket() {
       websocket = new WebSocket(gateway);
       websocket.onmessage = function(event) {
-        const touchCounterElement = document.getElementById('touchCounter');
-        if (touchCounterElement) {
-          touchCounterElement.innerHTML = event.data;
-        } else {
-          console.error("Element with id 'touchCounter' not found.");
-        }
+        document.getElementById('touchCounter').innerText = event.data;
       };
 
-      websocket.onerror = (error) => {
+      websocket.onerror = function(error) {
         console.error("WebSocket Error:", error);
       };
 
-      websocket.onclose = () => {
+      websocket.onclose = function() {
         console.log("WebSocket connection closed, retrying...");
-        setTimeout(initWebSocket, 1000);
+        setTimeout(initWebSocket, 5000);
       };
     }
+
+    // Fetch chart data from the server when the page loads
+    function fetchChartData() {
+      fetch('/data')
+        .then(response => response.json())
+        .then(data => {
+          displayChart(data);
+        })
+        .catch(error => {
+          console.error('Error fetching chart data:', error);
+        });
+    }
+
+    // Display a static chart with data fetched from the server
+    function displayChart(data) {
+      const ctx = document.getElementById('touchChart').getContext('2d');
+      const labels = data.map(entry => new Date(parseInt(entry.timestamp)).toLocaleTimeString());
+      const values = data.map(entry => entry.value);
+
+      // Initialize Chart.js with static data
+      touchChart = new Chart(ctx, {
+        type: 'line',
+        data: {
+          labels: labels,
+          datasets: [{
+            label: 'Touch Count',
+            data: values,
+            borderColor: 'rgba(75, 192, 192, 1)',
+            backgroundColor: 'rgba(75, 192, 192, 0.2)',
+            fill: true
+          }]
+        },
+        options: {
+          responsive: true,
+          scales: {
+            x: {
+              title: {
+                display: true,
+                text: 'Time'
+              }
+            },
+            y: {
+              title: {
+                display: true,
+                text: 'Touch Count'
+              }
+            }
+          }
+        }
+      });
+    }
   </script>
+</body>
 </html>
