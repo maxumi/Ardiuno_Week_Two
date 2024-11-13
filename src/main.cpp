@@ -42,6 +42,15 @@ const char* dataFilePath = "/data.csv";
 
 String ledState;
 
+// Define the button pin
+const int buttonPin = 21; // Choose any suitable GPIO pin not in use
+
+// Variables for button press timing
+volatile unsigned long buttonPressTime = 0;
+volatile unsigned long buttonReleaseTime = 0;
+volatile bool resetDataFlag = false;
+const unsigned long resetHoldTime = 5000; // 5 seconds to trigger reset
+
 // Function to convert CSV data to JSON
 String csvToJson(fs::FS &fs, const char * path) {
   File file = fs.open(path);
@@ -237,12 +246,34 @@ void performAnalysis() {
   }
 }
 
+// Interrupt Service Routine (ISR) for the button
+void IRAM_ATTR buttonISR() {
+  if (digitalRead(buttonPin) == LOW) {
+    // Button is pressed
+    buttonPressTime = millis();
+  } else {
+    // Button is released
+    buttonReleaseTime = millis();
+
+    // Check if the button was held down long enough
+    if (buttonReleaseTime - buttonPressTime >= resetHoldTime) {
+      resetDataFlag = true; // Set the flag to reset data
+    }
+  }
+}
+
 void setup() {
   Serial.begin(115200);
   initSPIFFS();
 
   pinMode(ledPin, OUTPUT);
   digitalWrite(ledPin, LOW);
+
+  // Initialize the button pin
+  pinMode(buttonPin, INPUT_PULLUP); // Assumes the button is connected to GND when pressed
+
+  // Attach an interrupt to the button pin
+  attachInterrupt(digitalPinToInterrupt(buttonPin), buttonISR, CHANGE);
 
   // Load Wi-Fi credentials from SPIFFS
   ssid = readFile(SPIFFS, ssidPath);
@@ -340,6 +371,26 @@ void loop() {
     lastSaveTime = millis();
     writeFile(SPIFFS, "/touchcount.txt", String(touchCounter).c_str());
     Serial.println("touchCounter saved to SPIFFS.");
+  }
+
+  // Check if reset is requested
+  if (resetDataFlag) {
+    resetDataFlag = false; // Clear the flag
+
+    // Reset your data variables
+    touchCounter = 0;
+    touchEventsInInterval = 0;
+    peakTouchRate = 0;
+
+    // Optionally, delete the data file
+    SPIFFS.remove(dataFilePath);
+
+    Serial.println("Data has been reset.");
+
+    // Notify connected WebSocket clients
+    if (ws.count() > 0) {
+      ws.textAll("reset");
+    }
   }
 
   delay(50);
