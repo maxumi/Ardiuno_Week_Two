@@ -1,75 +1,213 @@
-#include "WiFi.h"
-#include "ESPAsyncWebServer.h"
+/*********
+  Rui Santos & Sara Santos - Random Nerd Tutorials
+  Complete instructions at https://RandomNerdTutorials.com/esp32-wi-fi-manager-asyncwebserver/
+  Permission is hereby granted, free of charge, to any person obtaining a copy of this software and associated documentation files.
+*********/
+#include <Arduino.h>
+#include <WiFi.h>
+#include <ESPAsyncWebServer.h>
+#include <AsyncTCP.h>
 #include "SPIFFS.h"
 
-const char* ssid = "e307";
-const char* password = "rockyCartoon544";
-
-#define LED_PIN 2
-#define BUTTON_PIN 4
-
-volatile bool ledState = false;
-
+// Create AsyncWebServer object on port 80
 AsyncWebServer server(80);
 
-void IRAM_ATTR handleButtonPress() {
-  // Toggle the LED state and update it immediately
-  ledState = !ledState;
-  digitalWrite(LED_PIN, ledState);
+// Search for parameter in HTTP POST request
+const char* PARAM_INPUT_1 = "ssid";
+const char* PARAM_INPUT_2 = "pass";
+const char* PARAM_INPUT_3 = "ip";
+const char* PARAM_INPUT_4 = "gateway";
+
+// Variables to save values from HTML form
+String ssid;
+String pass;
+String ip;
+String gateway;
+
+// File paths to save input values permanently
+const char* ssidPath = "/ssid.txt";
+const char* passPath = "/pass.txt";
+const char* ipPath = "/ip.txt";
+const char* gatewayPath = "/gateway.txt";
+
+IPAddress localIP;
+IPAddress localGateway;
+IPAddress subnet(255, 255, 0, 0);
+
+unsigned long previousMillis = 0;
+const long interval = 10000;  // interval to wait for Wi-Fi connection (milliseconds)
+
+const int ledPin = 2;
+String ledState;
+
+// Initialize SPIFFS
+void initSPIFFS() {
+  if (!SPIFFS.begin(true)) {
+    Serial.println("An error has occurred while mounting SPIFFS");
+  } else {
+    Serial.println("SPIFFS mounted successfully");
+  }
 }
 
-String getLEDState() {
-  return ledState ? "ON" : "OFF";
+// Read file from SPIFFS
+String readFile(fs::FS &fs, const char * path) {
+  Serial.printf("Reading file: %s\r\n", path);
+  File file = fs.open(path);
+  if (!file || file.isDirectory()) {
+    Serial.println("- failed to open file for reading");
+    return String();
+  }
+  String fileContent;
+  while (file.available()) {
+    fileContent = file.readStringUntil('\n');
+    break;
+  }
+  return fileContent;
+}
+
+// Write file to SPIFFS
+void writeFile(fs::FS &fs, const char * path, const char * message) {
+  Serial.printf("Writing file: %s\r\n", path);
+  File file = fs.open(path, FILE_WRITE);
+  if (!file) {
+    Serial.println("- failed to open file for writing");
+    return;
+  }
+  if (file.print(message)) {
+    Serial.println("- file written");
+  } else {
+    Serial.println("- write failed");
+  }
+}
+
+// Initialize WiFi
+bool initWiFi() {
+  if (ssid == "" || ip == "") {
+    Serial.println("Undefined SSID or IP address.");
+    return false;
+  }
+  WiFi.mode(WIFI_STA);
+  localIP.fromString(ip.c_str());
+  localGateway.fromString(gateway.c_str());
+
+  if (!WiFi.config(localIP, localGateway, subnet)) {
+    Serial.println("STA Failed to configure");
+    return false;
+  }
+  WiFi.begin(ssid.c_str(), pass.c_str());
+  Serial.println("Connecting to WiFi...");
+
+  unsigned long currentMillis = millis();
+  previousMillis = currentMillis;
+
+  while (WiFi.status() != WL_CONNECTED) {
+    currentMillis = millis();
+    if (currentMillis - previousMillis >= interval) {
+      Serial.println("Failed to connect.");
+      return false;
+    }
+  }
+  Serial.println(WiFi.localIP());
+  return true;
+}
+
+// Replaces placeholder with LED state value
+String processor(const String& var) {
+  if (var == "STATE") {
+    if (digitalRead(ledPin)) {
+      ledState = "ON";
+    } else {
+      ledState = "OFF";
+    }
+    return ledState;
+  }
+  return String();
 }
 
 void setup() {
   Serial.begin(115200);
-  pinMode(LED_PIN, OUTPUT);
-  pinMode(BUTTON_PIN, INPUT_PULLUP);
 
-  // Gives the button Pin a function for attachInterrupt
-  attachInterrupt(BUTTON_PIN, handleButtonPress, FALLING);
+  initSPIFFS();
 
-  if (!SPIFFS.begin(true)) {
-    Serial.println("An Error has occurred while mounting SPIFFS");
-    return;
+  pinMode(ledPin, OUTPUT);
+  digitalWrite(ledPin, LOW);
+  
+  // Load values saved in SPIFFS
+  ssid = readFile(SPIFFS, ssidPath);
+  pass = readFile(SPIFFS, passPath);
+  ip = readFile(SPIFFS, ipPath);
+  gateway = readFile(SPIFFS, gatewayPath);
+  Serial.println(ssid);
+  Serial.println(pass);
+  Serial.println(ip);
+  Serial.println(gateway);
+
+  if (initWiFi()) {
+    server.on("/", HTTP_GET, [](AsyncWebServerRequest *request) {
+      request->send(SPIFFS, "/index.html", "text/html", false, processor);
+    });
+    server.serveStatic("/", SPIFFS, "/");
+    
+    server.on("/on", HTTP_GET, [](AsyncWebServerRequest *request) {
+      digitalWrite(ledPin, HIGH);
+      request->send(SPIFFS, "/index.html", "text/html", false, processor);
+    });
+
+    server.on("/off", HTTP_GET, [](AsyncWebServerRequest *request) {
+      digitalWrite(ledPin, LOW);
+      request->send(SPIFFS, "/index.html", "text/html", false, processor);
+    });
+    server.begin();
+  } else {
+    Serial.println("Setting AP (Access Point)");
+    WiFi.softAP("ESP-WIFI-MANAGER_MAX", NULL);
+    IPAddress IP = WiFi.softAPIP();
+    Serial.print("AP IP address: ");
+    Serial.println(IP);
+
+    server.on("/", HTTP_GET, [](AsyncWebServerRequest *request){
+      request->send(SPIFFS, "/wifimanager.html", "text/html");
+    });
+    server.serveStatic("/", SPIFFS, "/");
+    
+    server.on("/", HTTP_POST, [](AsyncWebServerRequest *request) {
+      int params = request->params();
+      for (int i = 0; i < params; i++) {
+        const AsyncWebParameter* p = request->getParam(i);
+        if (p->isPost()) {
+          if (p->name() == PARAM_INPUT_1) {
+            ssid = p->value().c_str();
+            Serial.print("SSID set to: ");
+            Serial.println(ssid);
+            writeFile(SPIFFS, ssidPath, ssid.c_str());
+          }
+          if (p->name() == PARAM_INPUT_2) {
+            pass = p->value().c_str();
+            Serial.print("Password set to: ");
+            Serial.println(pass);
+            writeFile(SPIFFS, passPath, pass.c_str());
+          }
+          if (p->name() == PARAM_INPUT_3) {
+            ip = p->value().c_str();
+            Serial.print("IP Address set to: ");
+            Serial.println(ip);
+            writeFile(SPIFFS, ipPath, ip.c_str());
+          }
+          if (p->name() == PARAM_INPUT_4) {
+            gateway = p->value().c_str();
+            Serial.print("Gateway set to: ");
+            Serial.println(gateway);
+            writeFile(SPIFFS, gatewayPath, gateway.c_str());
+          }
+        }
+      }
+      request->send(200, "text/plain", "Done. ESP will restart, connect to your router and go to IP address: " + ip);
+      delay(3000);
+      ESP.restart();
+    });
+    server.begin();
   }
-
-  // Connecting to Wi-Fi
-  WiFi.begin(ssid, password);
-  while (WiFi.status() != WL_CONNECTED) {
-    delay(1000);
-    Serial.println("Connecting to WiFi...");
-  }
-  // Show local ip address to connect. Note you need to be on the same ip address to work
-  Serial.println(WiFi.localIP());
-
-  // Route for root / web page
-  server.on("/", HTTP_GET, [](AsyncWebServerRequest *request) {
-    request->send(SPIFFS, "/index.html", String(), false);
-  });
-
-  //Loads style.css for index when needed.
-  server.on("/style.css", HTTP_GET, [](AsyncWebServerRequest *request) {
-    request->send(SPIFFS, "/style.css", "text/css");
-  });
-
-  //  toggle LED
-  server.on("/toggle", HTTP_GET, [](AsyncWebServerRequest *request) {
-    ledState = !ledState;
-    digitalWrite(LED_PIN, ledState);
-    request->send(200, "text/plain", getLEDState());
-  });
-
-  // Route to get the current LED state
-  server.on("/state", HTTP_GET, [](AsyncWebServerRequest *request) {
-    request->send(200, "text/plain", getLEDState());
-  });
-
-  // Start server
-  server.begin();
 }
 
 void loop() {
-
 }

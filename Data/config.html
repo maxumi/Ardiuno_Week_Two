@@ -1,0 +1,77 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>ESP32 Configuration Page</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <link rel="stylesheet" type="text/css" href="style.css">
+</head>
+<body>
+  <h1>ESP32 Configuration</h1>
+  
+  <!-- Menu Structure -->
+  <nav>
+    <button onclick="window.location.href='/'">Home</button>
+    <button onclick="window.location.href='/config'">Configuration</button>
+  </nav>
+
+  <section id="wifiConfig">
+    <h2>WiFi Configuration</h2>
+    <label for="ssid">SSID:</label>
+    <input type="text" id="ssid" placeholder="Enter SSID"><br><br>
+    <label for="password">Password:</label>
+    <input type="password" id="password" placeholder="Enter Password"><br><br>
+    <button onclick="saveWiFiConfig()">Save WiFi Configuration</button>
+  </section>
+
+  <section id="dataManagement">
+    <h2>Data Management</h2>
+    <button onclick="resetConfig()">Reset Configuration</button>
+    <button onclick="clearData()">Clear Data</button>
+  </section>
+
+  <script>
+    // Load WiFi configuration data on page load
+    document.addEventListener("DOMContentLoaded", loadWiFiConfig);
+
+    function loadWiFiConfig() {
+      fetch('/get_wifi_config')
+        .then(response => response.json())
+        .then(data => {
+          if (!data.error) {
+            document.getElementById("ssid").value = data.ssid;
+            document.getElementById("password").value = data.password;
+          } else {
+            console.log("No saved configuration found.");
+          }
+        })
+        .catch(error => console.error("Error loading configuration:", error));
+    }
+
+    // Function to save WiFi configuration
+    function saveWiFiConfig() {
+      const ssid = document.getElementById("ssid").value;
+      const password = document.getElementById("password").value;
+      fetch('/save_wifi', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ssid, password })
+      }).then(response => response.text())
+        .then(data => alert(data));
+    }
+
+    // Function to reset configuration (clear saved WiFi and settings)
+    function resetConfig() {
+      fetch('/reset_config')
+        .then(response => response.text())
+        .then(data => alert(data));
+    }
+
+    // Function to clear logged data
+    function clearData() {
+      fetch('/clear_data')
+        .then(response => response.text())
+        .then(data => alert(data));
+    }
+  </script>
+</body>
+</html>
