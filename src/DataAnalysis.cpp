@@ -1,6 +1,8 @@
 // DataAnalysis.cpp
 #include "DataAnalysis.h"
 #include "FileUtils.h"
+#include "WebServer.h"
+#include "globals.h"
 
 void performAnalysis() {
   if (millis() - lastAnalysisTime >= analysisInterval) {
@@ -19,9 +21,23 @@ void performAnalysis() {
     // Limit the CSV file to the last 100 entries
     limitCSVEntries(dataFilePath, 100);
 
-    Serial.println("saved to CSV.");
+    Serial.println("Data saved to CSV.");
 
     // Reset touchEventsInInterval for the next interval
     touchEventsInInterval = 0;
+
+    // **Send the new data point over WebSocket**
+    DynamicJsonDocument doc(256); // Adjust size as needed
+    doc["timestamp"] = timestamp;
+    doc["touchCount"] = touchCounter;
+    doc["touchRate"] = touchRate;
+
+    String jsonString;
+    serializeJson(doc, jsonString);
+    jsonString = "New_Data:" + jsonString;
+
+
+    // Send to all connected clients
+    ws.textAll(jsonString);
   }
 }
