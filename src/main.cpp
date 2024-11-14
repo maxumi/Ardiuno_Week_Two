@@ -60,6 +60,10 @@ void setup() {
       request->send(SPIFFS, "/wifimanager.html", "text/html");
     });
 
+    server.on("/style.css", HTTP_GET, [](AsyncWebServerRequest *request) {
+      request->send(SPIFFS, "/style.css", "text/css");
+    });
+
     // Handle form POST request to save Wi-Fi credentials
     server.on("/", HTTP_POST, [](AsyncWebServerRequest *request) {
       if (request->hasParam("ssid", true) && request->hasParam("pass", true)) {

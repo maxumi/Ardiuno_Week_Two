@@ -19,7 +19,7 @@ void performAnalysis() {
     // Limit the CSV file to the last 100 entries
     limitCSVEntries(dataFilePath, 100);
 
-    Serial.println("Analysis saved to CSV.");
+    Serial.println("saved to CSV.");
 
     // Reset touchEventsInInterval for the next interval
     touchEventsInInterval = 0;
