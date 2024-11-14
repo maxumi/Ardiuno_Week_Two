@@ -3,64 +3,87 @@
 <head>
   <title>ESP Touch Sensor Dashboard</title>
   <meta name="viewport" content="width=device-width, initial-scale=1">
+  
+  <!-- Bootstrap CSS -->
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" integrity="sha384-..." crossorigin="anonymous">
-  <link rel="stylesheet" type="text/css" href="style.css">
+  
+  <!-- Custom CSS -->
+  <link rel="stylesheet" href="style.css">
+  
+  <!-- Chart.js Library -->
   <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
 </head>
 <body>
+  <!-- Navigation Bar -->
   <nav class="navbar navbar-expand-lg navbar-dark bg-dark">
     <div class="container-fluid">
       <a class="navbar-brand" href="#">ESP Touch Sensor Dashboard</a>
-      <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#navbarNav" aria-controls="navbarNav" aria-expanded="false" aria-label="Toggle navigation">
+      <button class="navbar-toggler" type="button" data-bs-toggle="collapse"
+              data-bs-target="#navbarNav" aria-controls="navbarNav" aria-expanded="false"
+              aria-label="Toggle navigation">
         <span class="navbar-toggler-icon"></span>
       </button>
       <div class="collapse navbar-collapse" id="navbarNav">
         <ul class="navbar-nav ms-auto">
           <li class="nav-item"><a class="nav-link" href="#touchSensorSection">Touch Sensor</a></li>
-          <li class="nav-item"><a class="nav-link" href="#dataAnalysisSection">Data Analysis</a></li>
-          <li class="nav-item"><a class="nav-link" href="#resetDataSection">Reset Data</a></li>
+          <li class="nav-item"><a class="nav-link" href="#chartSection">Data Chart</a></li>
+          <li class="nav-item"><a class="nav-link" href="#resetChartSection">Reset Data</a></li>
         </ul>
       </div>
     </div>
   </nav>
 
+  <!-- Content Sections -->
   <div class="container mt-4">
+    <!-- Accordion -->
     <div class="accordion" id="dashboardAccordion">
+      <!-- Touch Sensor Section -->
       <div class="accordion-item">
         <h2 class="accordion-header" id="headingTouchSensor">
-          <button class="accordion-button" type="button" data-bs-toggle="collapse" data-bs-target="#collapseTouchSensor" aria-expanded="true" aria-controls="collapseTouchSensor">
+          <button class="accordion-button" type="button" data-bs-toggle="collapse"
+                  data-bs-target="#collapseTouchSensor" aria-expanded="true"
+                  aria-controls="collapseTouchSensor">
             Touch Sensor
           </button>
         </h2>
-        <div id="collapseTouchSensor" class="accordion-collapse collapse show" aria-labelledby="headingTouchSensor" data-bs-parent="#dashboardAccordion">
+        <div id="collapseTouchSensor" class="accordion-collapse collapse show"
+             aria-labelledby="headingTouchSensor" data-bs-parent="#dashboardAccordion">
           <div class="accordion-body" id="touchSensorSection">
             <p class="fs-5">Touch Counter: <span id="touchCounter">0</span></p>
           </div>
         </div>
       </div>
 
+      <!-- Data Chart Section -->
       <div class="accordion-item">
-        <h2 class="accordion-header" id="headingDataAnalysis">
-          <button class="accordion-button collapsed" type="button" data-bs-toggle="collapse" data-bs-target="#collapseDataAnalysis" aria-expanded="false" aria-controls="collapseDataAnalysis">
-            Data Analysis
+        <h2 class="accordion-header" id="headingDataChart">
+          <button class="accordion-button collapsed" type="button" data-bs-toggle="collapse"
+                  data-bs-target="#collapseDataChart" aria-expanded="false"
+                  aria-controls="collapseDataChart">
+            Data Chart
           </button>
         </h2>
-        <div id="collapseDataAnalysis" class="accordion-collapse collapse" aria-labelledby="headingDataAnalysis" data-bs-parent="#dashboardAccordion">
-          <div class="accordion-body" id="dataAnalysisSection">
+        <div id="collapseDataChart" class="accordion-collapse collapse"
+             aria-labelledby="headingDataChart" data-bs-parent="#dashboardAccordion">
+          <div class="accordion-body" id="chartSection">
             <canvas id="touchChart"></canvas>
           </div>
         </div>
       </div>
 
+      <!-- Reset Data Section -->
       <div class="accordion-item">
         <h2 class="accordion-header" id="headingResetData">
-          <button class="accordion-button collapsed" type="button" data-bs-toggle="collapse" data-bs-target="#collapseResetData" aria-expanded="false" aria-controls="collapseResetData">
+          <button class="accordion-button collapsed" type="button" data-bs-toggle="collapse"
+                  data-bs-target="#collapseResetData" aria-expanded="false"
+                  aria-controls="collapseResetData">
             Reset Data
           </button>
         </h2>
-        <div id="collapseResetData" class="accordion-collapse collapse" aria-labelledby="headingResetData" data-bs-parent="#dashboardAccordion">
-          <div class="accordion-body" id="resetDataSection">
-            <button class="btn btn-danger" onclick="requestDataReset()">Reset Data</button>
+        <div id="collapseResetData" class="accordion-collapse collapse"
+             aria-labelledby="headingResetData" data-bs-parent="#dashboardAccordion">
+          <div class="accordion-body" id="resetChartSection">
+            <button class="btn btn-danger" onclick="requestChartReset()">Reset Data</button>
             <p class="mt-2 text-success" id="resetStatus"></p>
           </div>
         </div>
@@ -68,101 +91,10 @@
     </div>
   </div>
 
+  <!-- Bootstrap JS Bundle in case i need it -->
   <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js" integrity="sha384-..." crossorigin="anonymous"></script>
-  
-  <script>
-    var gateway = `ws://${window.location.hostname}/ws`;
-    var websocket;
-    var touchChart;
 
-    window.addEventListener('load', onLoad);
-
-    function onLoad() {
-      initWebSocket();
-      fetchChartData();
-    }
-
-    function initWebSocket() {
-      websocket = new WebSocket(gateway);
-      websocket.onmessage = event => {
-        if (event.data === "reset") handleDataReset();
-        else document.getElementById('touchCounter').innerText = event.data;
-      };
-      websocket.onerror = error => console.error("WebSocket Error:", error);
-      websocket.onclose = () => setTimeout(initWebSocket, 5000);
-    }
-
-    function fetchChartData() {
-      fetch('/data')
-        .then(response => response.json())
-        .then(data => displayChart(data))
-        .catch(error => console.error('Error fetching chart data:', error));
-    }
-
-    function displayChart(data) {
-      const ctx = document.getElementById('touchChart').getContext('2d');
-      const labels = data.map(entry => new Date(parseInt(entry.timestamp)).toLocaleTimeString());
-      const touchCounts = data.map(entry => entry.touchCount);
-      const touchRates = data.map(entry => entry.touchRate);
-
-      if (touchChart) touchChart.destroy();
-
-      touchChart = new Chart(ctx, {
-        type: 'line',
-        data: {
-          labels: labels,
-          datasets: [
-            {
-              label: 'Total Touch Count',
-              data: touchCounts,
-              borderColor: 'rgba(75, 192, 192, 1)',
-              backgroundColor: 'rgba(75, 192, 192, 0.2)',
-              fill: false,
-              yAxisID: 'y'
-            },
-            {
-              label: 'Touch Rate (per minute)',
-              data: touchRates,
-              borderColor: 'rgba(255, 99, 132, 1)',
-              backgroundColor: 'rgba(255, 99, 132, 0.2)',
-              fill: false,
-              yAxisID: 'y1'
-            }
-          ]
-        },
-        options: {
-          responsive: true,
-          interaction: { mode: 'index', intersect: false },
-          stacked: false,
-          plugins: { title: { display: true, text: 'Touch Data Analysis' } },
-          scales: {
-            y: { type: 'linear', position: 'left', title: { display: true, text: 'Total Touch Count' } },
-            y1: { type: 'linear', position: 'right', grid: { drawOnChartArea: false }, title: { display: true, text: 'Touch Rate (per minute)' } },
-            x: { title: { display: true, text: 'Time' } }
-          }
-        }
-      });
-    }
-
-    function requestDataReset() {
-      fetch('/reset')
-        .then(response => response.text())
-        .then(message => {
-          if (message === "Data has been reset.") handleDataReset();
-          document.getElementById('resetStatus').innerText = message;
-        })
-        .catch(error => {
-          console.error("Error sending reset request:", error);
-          document.getElementById('resetStatus').innerText = "Reset failed. Please try again.";
-        });
-    }
-
-    function handleDataReset() {
-      document.getElementById('touchCounter').innerText = '0';
-      if (touchChart) touchChart.destroy();
-      fetchChartData();
-      setTimeout(() => document.getElementById('resetStatus').innerText = '', 5000);
-    }
-  </script>
+  <!-- Include my own JS File -->
+  <script src="script.js"></script>
 </body>
 </html>
