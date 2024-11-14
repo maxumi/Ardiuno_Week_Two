@@ -27,48 +27,54 @@ function fetchChartData() {
 }
 
 function displayChart(data) {
-  const ctx = document.getElementById('touchChart').getContext('2d');
-  const labels = data.map(entry => new Date(parseInt(entry.timestamp)).toLocaleTimeString());
-  const touchCounts = data.map(entry => entry.touchCount);
-  const touchRates = data.map(entry => entry.touchRate);
-
-  if (touchChart) touchChart.destroy();
-
-  touchChart = new Chart(ctx, {
-    type: 'line',
-    data: {
-      labels: labels,
-      datasets: [
-        {
-          label: 'Total Touch Count',
-          data: touchCounts,
-          borderColor: 'rgba(75, 192, 192, 1)',
-          backgroundColor: 'rgba(75, 192, 192, 0.2)',
-          yAxisID: 'y'
-        },
-        {
-          label: 'Touch Rate (per minute)',
-          data: touchRates,
-          borderColor: 'rgba(255, 99, 132, 1)',
-          backgroundColor: 'rgba(255, 99, 132, 0.2)',
-          yAxisID: 'y1'
+    const ctx = document.getElementById('touchChart').getContext('2d');
+  
+    // Generate labels as incremental minutes starting from zero
+    const labels = data.map((_, index) => {
+      const minutes = index;
+      return new Date(minutes * 60000).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' });
+    });
+  
+    const touchCounts = data.map(entry => entry.touchCount);
+    const touchRates = data.map(entry => entry.touchRate);
+  
+    if (touchChart) touchChart.destroy();
+  
+    touchChart = new Chart(ctx, {
+      type: 'line',
+      data: {
+        labels: labels,
+        datasets: [
+          {
+            label: 'Total Touch Count',
+            data: touchCounts,
+            borderColor: 'rgba(75, 192, 192, 1)',
+            backgroundColor: 'rgba(75, 192, 192, 0.2)',
+            yAxisID: 'y'
+          },
+          {
+            label: 'Touch Rate (per minute)',
+            data: touchRates,
+            borderColor: 'rgba(255, 99, 132, 1)',
+            backgroundColor: 'rgba(255, 99, 132, 0.2)',
+            yAxisID: 'y1'
+          }
+        ]
+      },
+      options: {
+        responsive: true,
+        interaction: { mode: 'index', intersect: false },
+        stacked: false,
+        plugins: { title: { display: true, text: 'Touch Data Chart' } },
+        scales: {
+          y: { type: 'linear', position: 'left', title: { display: true, text: 'Total Touch Count' } },
+          y1: { type: 'linear', position: 'right', grid: { drawOnChartArea: false }, title: { display: true, text: 'Touch Rate (per minute)' } },
+          x: { title: { display: true, text: 'Time' } }
         }
-      ]
-    },
-    options: {
-      responsive: true,
-      interaction: { mode: 'index', intersect: false },
-      stacked: false,
-      plugins: { title: { display: true, text: 'Touch Data Chart' } },
-      scales: {
-        y: { type: 'linear', position: 'left', title: { display: true, text: 'Total Touch Count' } },
-        y1: { type: 'linear', position: 'right', grid: { drawOnChartArea: false }, title: { display: true, text: 'Touch Rate (per minute)' } },
-        x: { title: { display: true, text: 'Time' } }
       }
-    }
-  });
-}
-
+    });
+  }
+  
 function requestChartReset() {
   fetch('/reset')
     .then(response => response.text())
