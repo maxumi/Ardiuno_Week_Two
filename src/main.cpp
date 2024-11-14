@@ -2,205 +2,159 @@
 #include <WiFi.h>
 #include <ESPAsyncWebServer.h>
 #include <AsyncTCP.h>
-#include "SPIFFS.h"
+#include <SPIFFS.h>
+#include <vector>
+
 
 // Create AsyncWebServer object on port 80
 AsyncWebServer server(80);
 AsyncWebSocket ws("/ws"); // WebSocket server on endpoint "/ws"
 
-// Wi-Fi parameters
-const char* PARAM_INPUT_1 = "ssid";
-const char* PARAM_INPUT_2 = "pass";
-const char* PARAM_INPUT_3 = "ip";
-const char* PARAM_INPUT_4 = "gateway";
-
-String ssid, pass, ip, gateway;
+// Wi-Fi credentials file paths
 const char* ssidPath = "/ssid.txt";
 const char* passPath = "/pass.txt";
-const char* ipPath = "/ip.txt";
-const char* gatewayPath = "/gateway.txt";
 
-IPAddress localIP;
-IPAddress localGateway;
-IPAddress subnet(255, 255, 0, 0);
-
+// Touch sensor parameters
 const int touchPin = T0;
-int touchThreshold = 40;
+const int touchThreshold = 40;
 int touchCounter = 0;
 int touchEventsInInterval = 0;
-int peakTouchRate = 0;
 
-const int ledPin = 2;
-unsigned long lastSaveTime = 0;
-unsigned long previousMillis = 0;
-const unsigned long saveInterval = 60000;      // Save every 60 seconds
-const unsigned long analysisInterval = 60000;  // Analyze every 60 seconds
+// Timing parameters
 unsigned long lastAnalysisTime = 0;
-const long interval = 10000;                   // Wi-Fi connection interval
+const unsigned long analysisInterval = 60000; // Analyze every 60 seconds
 
+// Data storage
 const char* dataFilePath = "/data.csv";
 
-String ledState;
-
-// Define the button pin
-const int buttonPin = 21; // Choose any suitable GPIO pin not in use
-
-// Variables for button press timing
-volatile unsigned long buttonPressTime = 0;
-volatile unsigned long buttonReleaseTime = 0;
+// Reset button parameters
+const int buttonPin = 21; // GPIO pin for reset button
 volatile bool resetDataFlag = false;
 const unsigned long resetHoldTime = 5000; // 5 seconds to trigger reset
+unsigned long buttonPressTime = 0;
+
+// WebSocket update interval
+const unsigned long wsUpdateInterval = 1000; // 1 second
+unsigned long lastWsUpdate = 0;
 
 // Function to convert CSV data to JSON
-String csvToJson(fs::FS &fs, const char * path) {
-  File file = fs.open(path);
+String csvToJson(const char* path) {
+  File file = SPIFFS.open(path);
   if (!file) {
     Serial.println("- failed to open file for reading");
     return "[]";
   }
   String json = "[";
-  bool firstLine = true;
   while (file.available()) {
     String line = file.readStringUntil('\n');
     if (line.length() > 0) {
-      if (!firstLine) {
-        json += ",";
-      } else {
-        firstLine = false;
-      }
       int commaIndex1 = line.indexOf(',');
       int commaIndex2 = line.indexOf(',', commaIndex1 + 1);
       if (commaIndex1 > 0 && commaIndex2 > commaIndex1) {
         String timestamp = line.substring(0, commaIndex1);
         String touchCount = line.substring(commaIndex1 + 1, commaIndex2);
         String touchRate = line.substring(commaIndex2 + 1);
-        json += "{\"timestamp\":" + timestamp + ",\"touchCount\":" + touchCount + ",\"touchRate\":" + touchRate + "}";
+        json += "{\"timestamp\":" + timestamp + ",\"touchCount\":" + touchCount + ",\"touchRate\":" + touchRate + "},";
       }
     }
   }
+  if (json.endsWith(",")) json.remove(json.length() - 1);
   json += "]";
   file.close();
   return json;
 }
 
 // Function to append data to a file
-void appendToFile(fs::FS &fs, const char * path, const char * message) {
-  File file = fs.open(path, FILE_APPEND);
-  if (!file) {
-    Serial.println("- failed to open file for appending");
-    return;
-  }
-  if (file.println(message)) {
-    Serial.println("- message appended");
+void appendToFile(const char* path, const String& message) {
+  File file = SPIFFS.open(path, FILE_APPEND);
+  if (file) {
+    file.println(message);
+    file.close();
   } else {
-    Serial.println("- append failed");
+    Serial.println("- failed to open file for appending");
   }
-  file.close();
 }
 
-// Function to limit the number of entries in the CSV file
-void limitCSVEntries(fs::FS &fs, const char * path, int maxEntries) {
-  File file = fs.open(path, FILE_READ);
+// Limit the number of entries in the CSV file
+void limitCSVEntries(const char* path, int maxEntries) {
+  File file = SPIFFS.open(path, FILE_READ);
   if (!file) {
     Serial.println("- failed to open file for reading");
     return;
   }
-
-  // Read all lines into an array
-  String lines[101]; // Max entries + 1
-  int lineCount = 0;
+  std::vector<String> lines;
   while (file.available()) {
     String line = file.readStringUntil('\n');
     if (line.length() > 0) {
-      if (lineCount < 101) {
-        lines[lineCount] = line;
-        lineCount++;
-      }
+      lines.push_back(line);
     }
   }
   file.close();
 
-  // If more than maxEntries, remove oldest entries
-  int start = lineCount > maxEntries ? lineCount - maxEntries : 0;
-  int count = lineCount - start;
+  // Keep only the last maxEntries lines
+  if (lines.size() > maxEntries) {
+    lines.erase(lines.begin(), lines.end() - maxEntries);
+  }
 
   // Write back the latest entries to the file
-  file = fs.open(path, FILE_WRITE);
-  if (!file) {
-    Serial.println("- failed to open file for writing");
-    return;
-  }
-  for (int i = start; i < lineCount; i++) {
-    file.println(lines[i]);
-  }
-  file.close();
-}
-
-// Initialize SPIFFS
-void initSPIFFS() {
-  if (!SPIFFS.begin(true)) {
-    Serial.println("An error has occurred while mounting SPIFFS");
+  file = SPIFFS.open(path, FILE_WRITE);
+  if (file) {
+    for (const auto& line : lines) {
+      file.println(line);
+    }
+    file.close();
   } else {
-    Serial.println("SPIFFS mounted successfully");
+    Serial.println("- failed to open file for writing");
   }
 }
 
 // Read file from SPIFFS
-String readFile(fs::FS &fs, const char * path) {
-  Serial.printf("Reading file: %s\r\n", path);
-  File file = fs.open(path);
-  if (!file || file.isDirectory()) {
-    Serial.println("- failed to open file for reading");
+String readFile(const char* path) {
+  File file = SPIFFS.open(path);
+  if (!file) {
+    Serial.printf("- failed to open %s for reading\n", path);
     return String();
   }
-  String fileContent;
-  while (file.available()) {
-    fileContent = file.readStringUntil('\n');
-    break;
-  }
+  String content = file.readStringUntil('\n');
   file.close();
-  return fileContent;
+  return content;
 }
 
 // Write file to SPIFFS
-void writeFile(fs::FS &fs, const char * path, const char * message) {
-  Serial.printf("Writing file: %s\r\n", path);
-  File file = fs.open(path, FILE_WRITE);
-  if (!file) {
-    Serial.println("- failed to open file for writing");
-    return;
-  }
-  if (file.print(message)) {
-    Serial.println("- file written");
+void writeFile(const char* path, const String& message) {
+  File file = SPIFFS.open(path, FILE_WRITE);
+  if (file) {
+    file.print(message);
+    file.close();
   } else {
-    Serial.println("- write failed");
+    Serial.printf("- failed to open %s for writing\n", path);
   }
-  file.close();
 }
 
 // Initialize WiFi
-bool initWiFi() {
-  if (ssid == "") {
+bool initWiFi(const String& ssid, const String& pass) {
+  if (ssid.isEmpty()) {
     Serial.println("Undefined SSID.");
     return false;
   }
   WiFi.mode(WIFI_STA);
-
   WiFi.begin(ssid.c_str(), pass.c_str());
   Serial.println("Connecting to WiFi...");
 
-  unsigned long currentMillis = millis();
-  previousMillis = currentMillis;
+  unsigned long startAttemptTime = millis();
+  const unsigned long wifiTimeout = 10000; // 10 seconds timeout
 
-  while (WiFi.status() != WL_CONNECTED) {
-    currentMillis = millis();
-    if (currentMillis - previousMillis >= interval) {
-      Serial.println("Failed to connect.");
-      return false;
-    }
+  while (WiFi.status() != WL_CONNECTED && millis() - startAttemptTime < wifiTimeout) {
+    delay(100);
   }
-  Serial.println(WiFi.localIP()); // This will show the dynamically assigned IP
-  return true;
+  if (WiFi.status() == WL_CONNECTED) {
+    Serial.print("Connected! IP address: ");
+    Serial.println(WiFi.localIP());
+    return true;
+  } else {
+    Serial.println("Failed to connect.");
+    return false;
+  }
 }
 
 // WebSocket event handler
@@ -213,9 +167,6 @@ void onWebSocketEvent(AsyncWebSocket *server, AsyncWebSocketClient *client,
   }
 }
 
-const unsigned long wsUpdateInterval = 1000; // 1 second WebSocket update interval
-unsigned long lastWsUpdate = 0;
-
 // Perform periodic analysis and save results
 void performAnalysis() {
   if (millis() - lastAnalysisTime >= analysisInterval) {
@@ -223,21 +174,16 @@ void performAnalysis() {
 
     // Calculate touch rate (touch events per minute)
     int touchRate = touchEventsInInterval;
-    if (touchRate > peakTouchRate) {
-      peakTouchRate = touchRate;
-    }
-
-    // Get current timestamp
     unsigned long timestamp = millis();
 
     // Format data as CSV line: timestamp,touchCounter,touchRate
     String dataLine = String(timestamp) + "," + String(touchCounter) + "," + String(touchRate);
 
     // Append data to CSV file
-    appendToFile(SPIFFS, dataFilePath, dataLine.c_str());
+    appendToFile(dataFilePath, dataLine);
 
     // Limit the CSV file to the last 100 entries
-    limitCSVEntries(SPIFFS, dataFilePath, 100);
+    limitCSVEntries(dataFilePath, 100);
 
     Serial.println("Analysis saved to CSV.");
 
@@ -249,54 +195,64 @@ void performAnalysis() {
 // Interrupt Service Routine (ISR) for the button
 void IRAM_ATTR buttonISR() {
   if (digitalRead(buttonPin) == LOW) {
-    // Button is pressed
     buttonPressTime = millis();
   } else {
-    // Button is released
-    buttonReleaseTime = millis();
-
-    // Check if the button was held down long enough
-    if (buttonReleaseTime - buttonPressTime >= resetHoldTime) {
+    if (millis() - buttonPressTime >= resetHoldTime) {
       resetDataFlag = true; // Set the flag to reset data
     }
   }
 }
 
+// Reset data function
+void resetData() {
+  touchCounter = 0;
+  touchEventsInInterval = 0;
+  SPIFFS.remove(dataFilePath);
+  Serial.println("Data has been reset.");
+
+  // Notify connected WebSocket clients
+  if (ws.count() > 0) {
+    ws.textAll("reset");
+  }
+}
+
 void setup() {
   Serial.begin(115200);
-  initSPIFFS();
-
-  pinMode(ledPin, OUTPUT);
-  digitalWrite(ledPin, LOW);
+  if (!SPIFFS.begin(true)) {
+    Serial.println("An error has occurred while mounting SPIFFS");
+  } else {
+    Serial.println("SPIFFS mounted successfully");
+  }
 
   // Initialize the button pin
   pinMode(buttonPin, INPUT_PULLUP); // Assumes the button is connected to GND when pressed
-
-  // Attach an interrupt to the button pin
   attachInterrupt(digitalPinToInterrupt(buttonPin), buttonISR, CHANGE);
 
   // Load Wi-Fi credentials from SPIFFS
-  ssid = readFile(SPIFFS, ssidPath);
-  pass = readFile(SPIFFS, passPath);
-  ip = readFile(SPIFFS, ipPath);
-  gateway = readFile(SPIFFS, gatewayPath);
+  String ssid = readFile(ssidPath);
+  String pass = readFile(passPath);
 
-  // Initialize Wi-Fi in STA mode or configure as Access Point
-  if (initWiFi()) {
+  // Initialize Wi-Fi or set up Access Point
+  if (initWiFi(ssid, pass)) {
     // Serve main HTML page
     server.on("/", HTTP_GET, [](AsyncWebServerRequest *request) {
       request->send(SPIFFS, "/index.html", "text/html");
     });
-    server.serveStatic("/", SPIFFS, "/");
 
     // Serve data as JSON
     server.on("/data", HTTP_GET, [](AsyncWebServerRequest *request) {
-      String json = csvToJson(SPIFFS, dataFilePath);
+      String json = csvToJson(dataFilePath);
       request->send(200, "application/json", json);
+    });
+
+    // Handle reset data request
+    server.on("/reset", HTTP_GET, [](AsyncWebServerRequest *request) {
+      resetData();
+      request->send(200, "text/plain", "Data has been reset.");
     });
   } else {
     Serial.println("Setting AP (Access Point)");
-    WiFi.softAP("ESP-WIFI-MANAGER_MAX", NULL);
+    WiFi.softAP("ESP-WIFI-MANAGER_MAX");
     IPAddress IP = WiFi.softAPIP();
     Serial.print("AP IP address: ");
     Serial.println(IP);
@@ -308,36 +264,22 @@ void setup() {
 
     // Handle form POST request to save Wi-Fi credentials
     server.on("/", HTTP_POST, [](AsyncWebServerRequest *request) {
-      int params = request->params();
-      for (int i = 0; i < params; i++) {
-        AsyncWebParameter* p = request->getParam(i);
-        if (p->isPost()) {
-          if (p->name() == "ssid") {
-            ssid = p->value().c_str();
-            writeFile(SPIFFS, ssidPath, ssid.c_str());
-          }
-          if (p->name() == "pass") {
-            pass = p->value().c_str();
-            writeFile(SPIFFS, passPath, pass.c_str());
-          }
-          if (p->name() == "ip") {
-            ip = p->value().c_str();
-            writeFile(SPIFFS, ipPath, ip.c_str());
-          }
-          if (p->name() == "gateway") {
-            gateway = p->value().c_str();
-            writeFile(SPIFFS, gatewayPath, gateway.c_str());
-          }
-        }
+      if (request->hasParam("ssid", true) && request->hasParam("pass", true)) {
+        String ssid = request->getParam("ssid", true)->value();
+        String pass = request->getParam("pass", true)->value();
+        writeFile(ssidPath, ssid);
+        writeFile(passPath, pass);
+        request->send(200, "text/plain", "Settings saved. Rebooting...");
+        delay(1000);
+        ESP.restart();
+      } else {
+        request->send(400, "text/plain", "Bad Request");
       }
-      request->send(200, "text/plain", "Settings saved. Rebooting...");
-      delay(3000);
-      ESP.restart();
     });
   }
 
-  // Serve the CSS file
-  server.serveStatic("/style.css", SPIFFS, "/style.css");
+  // Serve static files
+  server.serveStatic("/", SPIFFS, "/");
 
   // WebSocket setup and event handling
   ws.onEvent(onWebSocketEvent);
@@ -348,12 +290,12 @@ void setup() {
 }
 
 void loop() {
+  // Touch sensor reading
   int touchValue = touchRead(touchPin);
   if (touchValue < touchThreshold) {
     touchCounter++;
     touchEventsInInterval++;
-    Serial.print("Touch detected! Counter: ");
-    Serial.println(touchCounter);
+    Serial.printf("Touch detected! Counter: %d\n", touchCounter);
     delay(500); // Debounce delay
   }
 
@@ -366,31 +308,10 @@ void loop() {
   // Perform periodic analysis and save results
   performAnalysis();
 
-  // Periodically save touchCounter to SPIFFS
-  if (millis() - lastSaveTime > saveInterval) {
-    lastSaveTime = millis();
-    writeFile(SPIFFS, "/touchcount.txt", String(touchCounter).c_str());
-    Serial.println("touchCounter saved to SPIFFS.");
-  }
-
   // Check if reset is requested
   if (resetDataFlag) {
     resetDataFlag = false; // Clear the flag
-
-    // Reset your data variables
-    touchCounter = 0;
-    touchEventsInInterval = 0;
-    peakTouchRate = 0;
-
-    // Optionally, delete the data file
-    SPIFFS.remove(dataFilePath);
-
-    Serial.println("Data has been reset.");
-
-    // Notify connected WebSocket clients
-    if (ws.count() > 0) {
-      ws.textAll("reset");
-    }
+    resetData();
   }
 
   delay(50);
